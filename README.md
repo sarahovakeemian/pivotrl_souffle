@@ -6,6 +6,50 @@ Traditional post-training for agentic tasks forces a bad trade-off: **SFT** is c
 
 This repo makes that idea tangible and interactive.
 
+> **New here?** The next section explains everything in plain English — no math. Already fluent in SFT / RL / GRPO? Skip straight to the [TL;DR](#tldr).
+
+---
+
+## Start here — the idea in plain English
+
+### The problem: teaching an AI a multi-step job
+
+A large language model (LLM) — think ChatGPT — starts out good at general language but not at *your* specific multi-step task (using tools, writing code, driving a terminal, or… baking a soufflé). Teaching it that task after its initial training is called **post-training**, and there are two classic ways to do it:
+
+- **SFT (Supervised Fine-Tuning) = learning by imitation.** You show the model lots of expert examples — "in this situation, the expert did *X*" — and it copies them. Cheap and fast. The catch: a model that only imitates tends to **forget** things it used to know that weren't in the examples — like a student who crams one textbook and blanks on everything else. That forgetting is what "catastrophic out-of-domain degradation" means.
+
+- **RL (Reinforcement Learning) = learning by trial and error.** Instead of copying an expert, the model *tries* actions, gets a **reward** when it does well (soufflé rises = reward 1; soufflé collapses = reward 0), and adjusts itself to earn more reward next time. This keeps its general skills intact — but it's **expensive**, because to learn even one lesson the model has to actually play through the task many times (those play-throughs are called **rollouts**), and every rollout costs compute.
+
+**The dilemma:** SFT is cheap but forgetful; RL remembers but is costly.
+
+**PivotRL's insight:** in a multi-step task, *most steps teach you nothing.* If every reasonable action at a step works — or every action fails — there's nothing to learn there; the outcome is a foregone conclusion. The only steps worth practicing are the **make-or-break moments** where some choices succeed and others fail. PivotRL spots those moments ("**pivots**") cheaply, then spends its expensive RL practice **only** on them. You get RL's "doesn't forget" benefit at a fraction of the cost.
+
+### The soufflé game (our environment)
+
+To make this watchable, we built a tiny 3-step cooking task. The "agent" (the model) plays a chef making a soufflé, making one decision per step:
+
+1. **Preparation** — grease and sugar the ramekins. *Any* sensible prep works, so **every action earns reward 1**. Nothing to learn (there's no wrong move).
+2. **Baking** 🔥 — the top is browning too fast and the soufflé is about to be ruined. Now choices really matter: *"open the oven door"* → it collapses (reward 0); *"crank the heat"* → it burns (reward 0); *"tent it with foil and lower the temperature"* → it rises perfectly (reward 1). This is the **make-or-break step — the pivot.**
+3. **Plating** — add a sweet topping. *Any* sweet topping is fine ("powdered sugar", "chocolate syrup", "cocoa"…), so **every valid action earns reward 1**. Again, nothing to learn.
+
+A small piece of code called a **verifier** decides the reward for each action (did the soufflé survive? is the topping actually sweet?). One deliberate trick: the plating verifier accepts *any* sweet topping, not one exact phrase — so the model isn't punished for saying "cocoa" instead of "powdered sugar". That mirrors real tasks where many different actions are equally correct.
+
+PivotRL runs a few cheap scouting attempts at all three steps, notices that only **Baking** has mixed outcomes, and trains on that step alone. SFT and end-to-end RL, by contrast, grind through all three.
+
+### What the numbers in the tables mean
+
+| Term | Plain-English meaning | Better when… |
+|---|---|---|
+| **Rollout / rollout-turn** | One "practice attempt" at one step of the task. Each one costs compute (the model has to think and act). "36 rollout-turns" = 36 practice attempts in total. Needing **fewer** of these is the entire point of PivotRL. | fewer (cheaper) |
+| **Online vs. offline rollout** | *Online* = expensive practice where the model is actively learning and updating. *Offline* = cheap scouting runs PivotRL does first, only to spot which steps are make-or-break (no learning happens, so they're much cheaper). | — |
+| **OOD drift**  `KL(π_θ‖π₀)` | How far the model has **wandered from its original self** on unrelated topics. "OOD" = out-of-domain (things the task wasn't about); "KL" is just a distance measure between the trained model (π_θ) and the original one (π₀). **Large drift = catastrophic forgetting** — it got worse at everything else while learning the task. | lower (remembers more) |
+| **P(rescue) at pivot** | The probability the trained model picks the **correct** rescue ("tent with foil and lower the temp") at the make-or-break baking step. It measures whether the model actually **learned the task**. All three methods land around ~0.9, i.e. they all learned it. | higher (learned better) |
+| **Wall-clock (s)** | Literally how many seconds the training took. | lower (faster) |
+| **Reward variance / pivot** | If practice attempts at a step earn a *mix* of rewards (some 1, some 0), the step is informative — a **pivot** worth training. If they all earn the same reward, there's nothing to learn there. | high variance = worth training |
+| **GRPO / advantage** | GRPO is the specific RL algorithm used here. An action's **advantage** is how much better it did than the average of its practice group; if every attempt ties, advantage is 0 and the model learns nothing from that step — the math behind "nothing to learn". | — |
+
+So when the table shows PivotRL using **12 rollout-turns vs. 36**, with **lower OOD drift** and the **same ~0.9 P(rescue)** — that's the whole thesis in three numbers: *it learned the task just as well, forgot less, and did it with a third of the practice.*
+
 ---
 
 ## TL;DR
@@ -14,9 +58,9 @@ We model an agent baking a soufflé over three turns:
 
 | Turn | State | What happens under GRPO |
 |------|-------|--------------------------|
-| 1️⃣ **Preparation** | Grease & sugar the ramekins | *Every* action succeeds → reward variance **0** → advantage **0** → **zero gradient** (wasted rollout) |
+| 1️⃣ **Preparation** | Grease & sugar the ramekins | *Every* action succeeds → reward variance **0** → advantage **0** → **no task-learning gradient** (wasted rollout) |
 | 2️⃣ **Baking** 🔥 | The top is browning too fast — rescue it! | *Mixed* outcomes (collapse / burn / perfect rise) → **high variance** → **the pivot** worth training |
-| 3️⃣ **Plating** | Add a sweet topping | *Any* sweet topping works → variance **0** → **zero gradient** (wasted rollout) |
+| 3️⃣ **Plating** | Add a sweet topping | *Any* sweet topping works → variance **0** → **no task-learning gradient** (wasted rollout) |
 
 Trained three ways on `Qwen/Qwen2.5-0.5B-Instruct`, on a **single NVIDIA T4**:
 
@@ -42,7 +86,7 @@ Group Relative Policy Optimization (GRPO), introduced in [DeepSeekMath](https://
 A_i = (r_i − mean(r)) / (std(r) + ε)
 ```
 
-The structural consequence this demo is built around: **when every action in a group gets the same reward — all succeed (`r = 1`) or all fail (`r = 0`) — the group's standard deviation is 0, so every advantage collapses to exactly 0, and the gradient is 0.** Those turns still consume a full rollout, but move the weights nowhere. In our kitchen, that's turns 1 (prep) and 3 (plating).
+The structural consequence this demo is built around: **when every action in a group gets the same reward — all succeed (`r = 1`) or all fail (`r = 0`) — the group's standard deviation is 0, so every advantage collapses to exactly 0, and the policy-gradient term is 0.** Those turns still consume a full rollout, but produce no signal that teaches the task — only the KL regularizer toward `π₀` still nudges the weights. In our kitchen, that's turns 1 (prep) and 3 (plating). (This is also why, in the results below, end-to-end GRPO — which still takes those extra KL-regularized steps — drifts *more* from `π₀` than PivotRL, which skips them entirely.)
 
 ### PivotRL: offline pivot filtering + functional verifiers
 

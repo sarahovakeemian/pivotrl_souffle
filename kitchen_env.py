@@ -167,6 +167,20 @@ class GourmetChefEnv:
         turn = turn["turn"] if isinstance(turn, dict) else turn
         return list(CANDIDATE_ACTIONS[turn])
 
+    def rollout_group(self, turn, n: int) -> List[str]:
+        """Return a group of ``n`` sampled rollouts for a turn.
+
+        Cycles the candidate pool so every reward outcome stays represented
+        regardless of ``n`` (models drawing ``n`` on-policy samples with
+        replacement). Guarantees ``len(result) == max(1, n)`` so rollout-turn
+        counts and group variance are correct for any G or K -- including
+        n > pool size (genuine repeats) and n < pool size (still spans outcomes,
+        since the rescue action is listed first for the pivot turn).
+        """
+        pool = self.candidate_actions(turn)
+        n = max(1, int(n))
+        return [pool[i % len(pool)] for i in range(n)]
+
     # ---- pivot profiling -------------------------------------------------- #
     def profile_turn(self, turn, sampler: "Callable[[str], List[str]] | None" = None) -> Dict:
         """Profile a turn's reward statistics over its candidate group.
@@ -236,9 +250,11 @@ CANDIDATE_ACTIONS: Dict[str, List[str]] = {
         "Gather and prep the ramekins for baking",
     ],
     TURN_BAKE: [
+        # Rescue listed first so a small group (n < 4) still spans both reward
+        # outcomes -> the pivot's variance survives truncation/cycling.
+        "Tent the souffle with foil and lower the temp",   # -> rises!    (1.0)
         "Open the oven door to cool it down",              # -> collapses (0.0)
         "Increase the heat to brown the top faster",       # -> burns     (0.0)
-        "Tent the souffle with foil and lower the temp",   # -> rises!    (1.0)
         "Crank the broiler to set the top",                # -> burns     (0.0)
     ],
     TURN_PLATE: [
