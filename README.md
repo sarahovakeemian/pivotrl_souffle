@@ -14,9 +14,9 @@ We model an agent baking a soufflé over three turns:
 
 | Turn | State | What happens under GRPO |
 |------|-------|--------------------------|
-| 1️⃣ **Preparation** | Grease & sugar the ramekins | *Every* action succeeds → reward variance **0** → advantage **0** → **zero gradient** (wasted rollout) |
+| 1️⃣ **Preparation** | Grease & sugar the ramekins | *Every* action succeeds → reward variance **0** → advantage **0** → **no task-learning gradient** (wasted rollout) |
 | 2️⃣ **Baking** 🔥 | The top is browning too fast — rescue it! | *Mixed* outcomes (collapse / burn / perfect rise) → **high variance** → **the pivot** worth training |
-| 3️⃣ **Plating** | Add a sweet topping | *Any* sweet topping works → variance **0** → **zero gradient** (wasted rollout) |
+| 3️⃣ **Plating** | Add a sweet topping | *Any* sweet topping works → variance **0** → **no task-learning gradient** (wasted rollout) |
 
 Trained three ways on `Qwen/Qwen2.5-0.5B-Instruct`, on a **single NVIDIA T4**:
 
@@ -42,7 +42,7 @@ Group Relative Policy Optimization (GRPO), introduced in [DeepSeekMath](https://
 A_i = (r_i − mean(r)) / (std(r) + ε)
 ```
 
-The structural consequence this demo is built around: **when every action in a group gets the same reward — all succeed (`r = 1`) or all fail (`r = 0`) — the group's standard deviation is 0, so every advantage collapses to exactly 0, and the gradient is 0.** Those turns still consume a full rollout, but move the weights nowhere. In our kitchen, that's turns 1 (prep) and 3 (plating).
+The structural consequence this demo is built around: **when every action in a group gets the same reward — all succeed (`r = 1`) or all fail (`r = 0`) — the group's standard deviation is 0, so every advantage collapses to exactly 0, and the policy-gradient term is 0.** Those turns still consume a full rollout, but produce no signal that teaches the task — only the KL regularizer toward `π₀` still nudges the weights. In our kitchen, that's turns 1 (prep) and 3 (plating). (This is also why, in the results below, end-to-end GRPO — which still takes those extra KL-regularized steps — drifts *more* from `π₀` than PivotRL, which skips them entirely.)
 
 ### PivotRL: offline pivot filtering + functional verifiers
 

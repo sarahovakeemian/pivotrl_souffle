@@ -191,7 +191,7 @@ def grpo_group_loss(
 ) -> Tuple[torch.Tensor, TurnStats]:
     """Compute the turn-level GRPO loss over a group of G candidate actions."""
     prompt_text = build_prompt_text(tok, SYSTEM_PROMPT, STATE_PROMPTS[turn])
-    actions = env.candidate_actions(turn)[:group_size]
+    actions = env.rollout_group(turn, group_size)
 
     rewards = torch.tensor(
         [env.get_functional_reward(turn, a) for a in actions],
@@ -318,6 +318,7 @@ def run_mode_sft(ref, tok, env, args, device) -> ModeResult:
             print(f"  {turn:<12} imitate={action!r:<48} CE_loss={float(loss):.4f}")
     wall = time.time() - t0
 
+    policy.eval()  # deterministic metrics: disable dropout (e.g. the gpt2 fallback)
     conf = policy_pivot_confidence(policy, tok, env, device)
     kl = ood_drift(policy, ref, tok, device)
     del policy, opt
@@ -360,6 +361,7 @@ def run_mode_a(ref, tok, env, args, device) -> ModeResult:
             )
     wall = time.time() - t0
 
+    policy.eval()  # deterministic metrics: disable dropout (e.g. the gpt2 fallback)
     conf = policy_pivot_confidence(policy, tok, env, device)
     kl = ood_drift(policy, ref, tok, device)
     del policy, opt
@@ -388,19 +390,19 @@ def run_mode_b(ref, tok, env, args, device) -> ModeResult:
     print(f"\n[B][offline] running K={args.k} dry rollouts per turn to find pivots...")
     rollout_turns_offline = 0
     profiles = {}
+    # Reuse the single source of truth for pivot criteria (GourmetChefEnv), with
+    # a sampler that draws exactly K rollouts per turn.
+    def _k_sampler(t):
+        return env.rollout_group(t, args.k)
     for turn in TURNS:
-        actions = env.candidate_actions(turn)[:args.k]
-        rewards = [env.get_functional_reward(turn, a) for a in actions]
-        mean = statistics.fmean(rewards)
-        var = statistics.pvariance(rewards)
-        is_pivot = (var > 1e-9) and (mean < env.lambda_diff)
-        profiles[turn] = (mean, var, is_pivot)
-        rollout_turns_offline += args.k
-        verdict = "PIVOT -> keep" if is_pivot else "flat (var=0 or high-mean) -> DISCARD"
-        print(f"  {turn:<12} mean={mean:.3f} var={var:.4f}  =>  {verdict}")
+        p = env.profile_turn(turn, sampler=_k_sampler)
+        profiles[turn] = p
+        rollout_turns_offline += len(p["actions"])
+        verdict = "PIVOT -> keep" if p["is_pivot"] else "flat (var=0 or high-mean) -> DISCARD"
+        print(f"  {turn:<12} mean={p['mean']:.3f} var={p['variance']:.4f}  =>  {verdict}")
 
-    pivots = [t for t in TURNS if profiles[t][2]]
-    discarded = [t for t in TURNS if not profiles[t][2]]
+    pivots = [t for t in TURNS if profiles[t]["is_pivot"]]
+    discarded = [t for t in TURNS if not profiles[t]["is_pivot"]]
     print(f"\n[B][pivot-filter] keep={pivots}  discard={discarded}")
     print(f"[B][pivot-filter] concentrating all training compute on: {pivots}")
 
@@ -422,6 +424,7 @@ def run_mode_b(ref, tok, env, args, device) -> ModeResult:
             )
     wall = time.time() - t0
 
+    policy.eval()  # deterministic metrics: disable dropout (e.g. the gpt2 fallback)
     conf = policy_pivot_confidence(policy, tok, env, device)
     kl = ood_drift(policy, ref, tok, device)
     del policy, opt
@@ -468,7 +471,6 @@ def print_comparison(s: ModeResult, a: ModeResult, b: ModeResult) -> None:
     # OOD retention is measured against the SFT baseline (as in the paper).
     drift_s = max(s.ood_kl, 1e-9)
     drift_b = max(b.ood_kl, 1e-9)
-    drift_a = max(a.ood_kl, 1e-9)
     retained_vs_sft = max(0.0, (drift_s - drift_b) / drift_s)
     projected_ood_gain = retained_vs_sft * PAPER_OOD_CEILING_PCT
 
@@ -515,7 +517,8 @@ def print_preamble(args, device) -> None:
         "Research background\n"
         "  GRPO (DeepSeekMath, arXiv:2402.03300): A_i = (r_i - mean)/(std+eps).\n"
         "    A zero-variance group (all pass OR all fail) => every advantage = 0\n"
-        "    => zero gradient. Such turns burn rollout compute for no signal.\n"
+        "    => zero policy-gradient signal (only the KL regularizer still acts).\n"
+        "    Such turns burn a rollout but teach the task nothing.\n"
         "  PivotRL (arXiv:2603.21383, Yi et al. 2026): run K local rollouts,\n"
         "    keep only 'pivots' (var>0 AND mean<lambda_diff), and train there.\n"
         "    Functional verifier reward r_func(s,a)=1[a in M(s)] rewards\n"

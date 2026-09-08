@@ -60,7 +60,7 @@ print("Loaded env from", _here)
 dbutils.widgets.removeAll()
 dbutils.widgets.dropdown(
     "turn2_action",
-    CANDIDATE_ACTIONS[TURN_BAKE][2],  # default: the correct rescue
+    CANDIDATE_ACTIONS[TURN_BAKE][0],  # default: the correct rescue (index 0)
     CANDIDATE_ACTIONS[TURN_BAKE],
     "🔥 Turn 2 action",
 )
