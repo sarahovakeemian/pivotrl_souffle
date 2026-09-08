@@ -1,0 +1,10 @@
+# Core dependencies for the PivotRL Souffle demo.
+# On Databricks ML runtimes torch/transformers/accelerate are preinstalled;
+# this file is for running locally (CPU/MPS) or pinning in CI.
+torch>=2.1
+transformers>=4.44
+accelerate>=0.33
+tabulate>=0.9
+# Notebooks additionally use (preinstalled on Databricks ML runtime):
+pandas>=2.0
+matplotlib>=3.7
