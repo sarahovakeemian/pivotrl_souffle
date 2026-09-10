@@ -64,15 +64,16 @@ We model an agent baking a soufflé over three turns:
 
 Trained three ways on `Qwen/Qwen2.5-0.5B-Instruct`, on a **single NVIDIA T4**:
 
-| Metric | SFT (imitation) | End-to-End GRPO | **PivotRL** |
-|---|---|---|---|
-| Turns trained on | all 3 | all 3 | **baking only** |
-| Online rollout-turns | 0 | 36 | **12** (+12 offline profiling) |
-| Wall-clock (s) | 3.21 | 7.41 | **2.54** |
-| OOD drift `KL(π_θ‖π₀)` ↓ | 1.100 | 0.546 | **0.213** |
-| P(rescue) learned at pivot | 0.926 | 0.898 | 0.911 |
+| Metric | Base π₀ (untrained) | SFT (imitation) | End-to-End GRPO | **PivotRL** |
+|---|---|---|---|---|
+| Turns trained on | none | all 3 | all 3 | **baking only** |
+| Online rollout-turns | 0 | 0 | 36 | **12** (+12 offline profiling) |
+| Wall-clock (s) | 0.00 | 2.84 | 7.91 | **2.70** |
+| OOD drift `KL(π_θ‖π₀)` ↓ | 0.000 | 1.100 | 0.546 | **0.213** |
+| P(rescue) at pivot ↑ | **0.253** | 0.926 | 0.898 | 0.911 |
+| ↳ lift over base | — | +0.672 | +0.645 | **+0.658** |
 
-**PivotRL used 3× fewer online rollout-turns than end-to-end GRPO, drifted the least from the reference policy (best OOD retention), and still learned the pivot** — all three arms end up preferring the correct rescue action. See [Findings](#findings) for the full interpretation.
+The **untrained base model scores `P(rescue)` = 0.253** — essentially random (1-in-4 among the candidate actions), which confirms the task genuinely requires learning rather than being something Qwen already knew. All three methods then **learn the pivot about equally well** (lift ≈ +0.65 to ~0.90). The story is what happens *around* that equal learning: **PivotRL used 3× fewer online rollout-turns than end-to-end GRPO and drifted the least from the reference policy (best OOD retention).** See [Findings](#findings) for the full interpretation.
 
 ---
 
@@ -170,19 +171,22 @@ The interactive notebook drives inputs with `dbutils.widgets` (pick the Turn-2 a
 Numbers below are a real run of `databricks_launcher` on `Qwen/Qwen2.5-0.5B-Instruct`, single T4, latest LTS ML runtime, `epochs=3, G=4, K=4, beta=0.02, lr=1e-5`.
 
 ```
-                                  SFT (imitation)   E2E GRPO   PivotRL
-Turns trained on                  all 3             all 3      baking
-Online rollout-turns              0                 36         12  (+12 offline)
-Wall-clock (s)                    3.21              7.41       2.54
-OOD drift  KL(π_θ‖π₀)             1.100             0.546      0.213
-P(rescue) at pivot                0.926             0.898      0.911
+                          Base π₀   SFT (imitation)   E2E GRPO   PivotRL
+Turns trained on          none      all 3             all 3      baking
+Online rollout-turns      0         0                 36         12  (+12 offline)
+Wall-clock (s)            0.00      2.84              7.91       2.70
+OOD drift  KL(π_θ‖π₀)     0.000     1.100             0.546      0.213
+P(rescue) at pivot        0.253     0.926             0.898      0.911
+  ↳ lift over base        --        +0.672            +0.645     +0.658
 ```
+
+**0. Baseline sanity check — the task is really being learned.** The untrained base model `π₀` scores `P(rescue) = 0.253` — essentially chance (1 of 4 candidate actions). That's the control the whole comparison needs: it proves the model did *not* already know the answer, so the jump to ~0.90 is genuine learning, not the base model's prior knowledge leaking through. (Had the base already scored ~0.9, the `P(rescue)` column would be measuring *retention*, not learning — which is exactly why you always run this baseline first.)
 
 **1. Compute (vs end-to-end GRPO): ~3× fewer online rollout-turns.** PivotRL's filter discarded prep and plating — the two turns whose GRPO advantage is provably 0 — and trained only the baking pivot. End-to-end GRPO rolled out all three turns every epoch and got *identical* learning value from two of them.
 
 **2. OOD retention (vs SFT): PivotRL drifts least.** SFT, with no KL brake, drifts furthest from the reference policy (`KL = 1.100`) — the mechanism behind catastrophic forgetting. PivotRL's few, KL-regularized, localized updates keep it closest to `π₀` (`0.213`), even edging out end-to-end GRPO (`0.546`), which takes more optimizer steps. In this run PivotRL **retained ~81% of the OOD capability SFT loses** (a projected **+8.09%** toward the paper's reported **+10.04%** ceiling).
 
-**3. All three still learn the task.** Every arm ends up assigning ~0.90–0.93 probability mass to the correct "tent with foil and lower the temp" rescue at the pivot. PivotRL gets there **without** spending gradient steps on the turns that had nothing to teach.
+**3. All three learn the task about equally — from a near-random start.** Every arm lifts `P(rescue)` from the base's 0.253 to ~0.90–0.93 (lift ≈ +0.65) — they all learn the rescue. The difference PivotRL makes is *how it gets there*: **without** spending gradient steps on the turns that had nothing to teach, and without drifting from `π₀`.
 
 > **The headline:** SFT is cheap but forgets; end-to-end RL remembers but is expensive; **PivotRL is cheap *and* remembers** — by spending compute only on the pivot.
 

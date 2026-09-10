@@ -105,7 +105,7 @@ import train_comparative_grpo as tc
 
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 
-res_s, res_a, res_b = tc.main([
+res_base, res_s, res_a, res_b = tc.main([
     "--model", MODEL,
     "--epochs", "3",
     "--group-size", "4",
@@ -136,7 +136,7 @@ summary = pd.DataFrame([
         "ood_kl_drift": round(r.ood_kl, 5),
         "p_rescue_at_pivot": round(r.pivot_confidence, 3),
     }
-    for r in (res_s, res_a, res_b)
+    for r in (res_base, res_s, res_a, res_b)
 ])
 display(summary)
 
@@ -144,8 +144,12 @@ display(summary)
 
 speedup = res_a.rollout_turns_train / max(res_b.rollout_turns_train, 1)
 retained = max(0.0, (res_s.ood_kl - res_b.ood_kl) / max(res_s.ood_kl, 1e-9))
+base_c = res_base.pivot_confidence
+print(f"BASELINE: untrained base pi_0 already scores P(rescue)={base_c:.3f} at the pivot.")
+print(f"  learning lift over base -> SFT {res_s.pivot_confidence-base_c:+.3f}  "
+      f"E2E {res_a.pivot_confidence-base_c:+.3f}  PivotRL {res_b.pivot_confidence-base_c:+.3f}")
 print(f"COMPUTE (vs E2E-GRPO): PivotRL used {speedup:.2f}x fewer online rollout-turns.")
-print(f"OOD DRIFT KL(pi_theta||pi_0):  SFT={res_s.ood_kl:.5f}  "
+print(f"OOD DRIFT KL(pi_theta||pi_0):  base=0.00000  SFT={res_s.ood_kl:.5f}  "
       f"E2E={res_a.ood_kl:.5f}  PivotRL={res_b.ood_kl:.5f}")
 print(f"PivotRL retained ~{retained*100:.0f}% of the OOD capability SFT loses "
       f"(projecting toward the paper's +{tc.PAPER_OOD_CEILING_PCT:.2f}%).")
@@ -169,9 +173,11 @@ def _r(x):
 
 
 dbutils.notebook.exit(_json.dumps({
+    "base": _r(res_base),
     "sft": _r(res_s),
     "e2e_grpo": _r(res_a),
     "pivotrl": _r(res_b),
+    "base_pivot_confidence": round(res_base.pivot_confidence, 4),
     "rollout_turn_speedup_vs_e2e": round(speedup, 2),
     "ood_retained_vs_sft_pct": round(retained * 100, 1),
     "projected_ood_gain_pct": round(retained * tc.PAPER_OOD_CEILING_PCT, 2),

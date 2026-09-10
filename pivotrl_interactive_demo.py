@@ -219,7 +219,7 @@ G = dbutils.widgets.get("G")
 K = dbutils.widgets.get("K")
 beta = dbutils.widgets.get("beta")
 
-res_s, res_a, res_b = tc.main([
+res_base, res_s, res_a, res_b = tc.main([
     "--model", "Qwen/Qwen2.5-0.5B-Instruct",
     "--epochs", "3",
     "--group-size", G,
@@ -241,32 +241,38 @@ retained = max(0.0, (res_s.ood_kl - res_b.ood_kl) / max(res_s.ood_kl, 1e-9))
 proj_ood = retained * tc.PAPER_OOD_CEILING_PCT
 
 
+base_c = res_base.pivot_confidence
+
+
 def metric_rows():
     data = [
-        ("Turns trained on", "all 3 (imitate)", "all 3", ", ".join(res_b.trained_turns)),
-        ("Online rollout-turns", res_s.rollout_turns_train, res_a.rollout_turns_train, res_b.rollout_turns_train),
-        ("Total rollout-turns (+offline)",
+        ("Turns trained on", "none", "all 3 (imitate)", "all 3", ", ".join(res_b.trained_turns)),
+        ("Online rollout-turns", 0, res_s.rollout_turns_train, res_a.rollout_turns_train, res_b.rollout_turns_train),
+        ("Total rollout-turns (+offline)", 0,
          res_s.rollout_turns_offline + res_s.rollout_turns_train,
          res_a.rollout_turns_offline + res_a.rollout_turns_train,
          res_b.rollout_turns_offline + res_b.rollout_turns_train),
-        ("Wall-clock (s)", f"{res_s.wall_clock_s:.2f}", f"{res_a.wall_clock_s:.2f}", f"{res_b.wall_clock_s:.2f}"),
-        ("OOD drift  KL(π_θ‖π₀)", f"{res_s.ood_kl:.5f}", f"{res_a.ood_kl:.5f}", f"{res_b.ood_kl:.5f}"),
-        ("P(rescue) at pivot", f"{res_s.pivot_confidence:.3f}", f"{res_a.pivot_confidence:.3f}", f"{res_b.pivot_confidence:.3f}"),
+        ("Wall-clock (s)", "0.00", f"{res_s.wall_clock_s:.2f}", f"{res_a.wall_clock_s:.2f}", f"{res_b.wall_clock_s:.2f}"),
+        ("OOD drift  KL(π_θ‖π₀)", "0.00000", f"{res_s.ood_kl:.5f}", f"{res_a.ood_kl:.5f}", f"{res_b.ood_kl:.5f}"),
+        ("P(rescue) at pivot", f"{base_c:.3f}", f"{res_s.pivot_confidence:.3f}", f"{res_a.pivot_confidence:.3f}", f"{res_b.pivot_confidence:.3f}"),
+        ("&nbsp;&nbsp;↳ lift over base", "—", f"{res_s.pivot_confidence-base_c:+.3f}", f"{res_a.pivot_confidence-base_c:+.3f}", f"{res_b.pivot_confidence-base_c:+.3f}"),
     ]
     out = ""
     for row in data:
-        name, vs, va, vb = row
+        name, vbase, vs, va, vb = row
         out += (f"<tr><td style='padding:8px 14px;font-weight:600'>{name}</td>"
+                f"<td style='padding:8px 14px;text-align:center;color:#666'>{vbase}</td>"
                 f"<td style='padding:8px 14px;text-align:center'>{vs}</td>"
                 f"<td style='padding:8px 14px;text-align:center'>{va}</td>"
                 f"<td style='padding:8px 14px;text-align:center;background:#fff3cd;font-weight:700'>{vb}</td></tr>")
     return out
 
 displayHTML(f"""
-<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:900px">
+<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:960px">
   <table style="border-collapse:collapse;width:100%;border:1px solid #ccc">
     <tr style="background:#111;color:#fff">
       <th style="padding:10px 14px;text-align:left">Metric</th>
+      <th style="padding:10px 14px">Base π₀ (untrained)</th>
       <th style="padding:10px 14px">SFT (imitation)</th>
       <th style="padding:10px 14px">E2E GRPO</th>
       <th style="padding:10px 14px">PivotRL</th>
