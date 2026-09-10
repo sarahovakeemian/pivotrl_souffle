@@ -459,12 +459,35 @@ def _fmt_table(headers: List[str], rows: List[List[str]]) -> str:
     return "\n".join(out)
 
 
+def run_baseline(ref, tok, env, args, device) -> ModeResult:
+    """Measure the UNTRAINED base model (pi_0) as a control -- no post-training
+    at all. This is the reference policy itself, so OOD drift KL(pi_0||pi_0) is
+    0 by definition. Its P(rescue) reveals how much of the 'learned' pivot
+    behavior the base model already had before any training -- the baseline
+    every trained arm must be judged against (learning = lift over this)."""
+    print("\n" + "#" * 72)
+    print("#  BASELINE -- Base model pi_0 : NO post-training (control)")
+    print("#" * 72)
+    conf = policy_pivot_confidence(ref, tok, env, device)  # ref is frozen + eval
+    print(f"  base P(rescue) at pivot = {conf:.3f}   (OOD drift = 0 by definition)")
+    return ModeResult(
+        name="Base pi_0 (untrained)",
+        trained_turns=[],
+        rollout_turns_offline=0,
+        rollout_turns_train=0,
+        epochs=0,
+        wall_clock_s=0.0,
+        ood_kl=0.0,
+        pivot_confidence=conf,
+    )
+
+
 def _total(r: ModeResult) -> int:
     return r.rollout_turns_offline + r.rollout_turns_train
 
 
-def print_comparison(s: ModeResult, a: ModeResult, b: ModeResult) -> None:
-    """Three-way comparison: SFT vs End-to-End GRPO vs PivotRL."""
+def print_comparison(base: ModeResult, s: ModeResult, a: ModeResult, b: ModeResult) -> None:
+    """Four-column comparison: Base pi_0 vs SFT vs End-to-End GRPO vs PivotRL."""
     # Compute-efficiency: PivotRL vs E2E-GRPO on online rollout-turns.
     turn_speedup = a.rollout_turns_train / max(b.rollout_turns_train, 1)
 
@@ -474,26 +497,50 @@ def print_comparison(s: ModeResult, a: ModeResult, b: ModeResult) -> None:
     retained_vs_sft = max(0.0, (drift_s - drift_b) / drift_s)
     projected_ood_gain = retained_vs_sft * PAPER_OOD_CEILING_PCT
 
-    headers = ["Metric", s.name, a.name, b.name]
+    # Learning = lift in P(rescue) over the untrained base.
+    base_conf = base.pivot_confidence
+    lift = lambda x: x.pivot_confidence - base_conf
+    already_good = base_conf >= 0.60  # base largely solves it already?
+
+    headers = ["Metric", base.name, s.name, a.name, b.name]
     rows = [
-        ["Turns trained on", "all 3 (imitate)", "all 3", ", ".join(b.trained_turns)],
-        ["Offline profiling rollout-turns", str(s.rollout_turns_offline), str(a.rollout_turns_offline), str(b.rollout_turns_offline)],
-        ["Online rollout-turns", str(s.rollout_turns_train), str(a.rollout_turns_train), str(b.rollout_turns_train)],
-        ["Total rollout-turns", str(_total(s)), str(_total(a)), str(_total(b))],
-        ["Measured wall-clock (s)", f"{s.wall_clock_s:.2f}", f"{a.wall_clock_s:.2f}", f"{b.wall_clock_s:.2f}"],
-        ["OOD drift  KL(pi_theta||pi_0)", f"{s.ood_kl:.5f}", f"{a.ood_kl:.5f}", f"{b.ood_kl:.5f}"],
-        ["P(rescue) at pivot (learned)", f"{s.pivot_confidence:.3f}", f"{a.pivot_confidence:.3f}", f"{b.pivot_confidence:.3f}"],
+        ["Turns trained on", "none", "all 3 (imitate)", "all 3", ", ".join(b.trained_turns)],
+        ["Offline profiling rollout-turns", "0", str(s.rollout_turns_offline), str(a.rollout_turns_offline), str(b.rollout_turns_offline)],
+        ["Online rollout-turns", "0", str(s.rollout_turns_train), str(a.rollout_turns_train), str(b.rollout_turns_train)],
+        ["Total rollout-turns", "0", str(_total(s)), str(_total(a)), str(_total(b))],
+        ["Measured wall-clock (s)", "0.00", f"{s.wall_clock_s:.2f}", f"{a.wall_clock_s:.2f}", f"{b.wall_clock_s:.2f}"],
+        ["OOD drift  KL(pi_theta||pi_0)", "0.00000", f"{s.ood_kl:.5f}", f"{a.ood_kl:.5f}", f"{b.ood_kl:.5f}"],
+        ["P(rescue) at pivot", f"{base_conf:.3f}", f"{s.pivot_confidence:.3f}", f"{a.pivot_confidence:.3f}", f"{b.pivot_confidence:.3f}"],
+        ["  -> lift over base", "--", f"{lift(s):+.3f}", f"{lift(a):+.3f}", f"{lift(b):+.3f}"],
     ]
 
     print("\n")
     print("=" * 72)
-    print("  COMPARATIVE RESULTS  --  SFT  vs.  End-to-End GRPO  vs.  PivotRL")
+    print("  COMPARATIVE RESULTS  --  Base pi_0  vs.  SFT  vs.  E2E GRPO  vs.  PivotRL")
     print("=" * 72)
     print(_fmt_table(headers, rows))
 
+    # Learning check first -- this is what the baseline is FOR.
+    if already_good:
+        learning_note = (
+            f"\n  * LEARNING (vs base pi_0): the UNTRAINED base already scores"
+            f"\n    P(rescue)={base_conf:.3f}, so it largely solves the pivot on its own."
+            f"\n    Post-training lifts it only marginally (SFT {lift(s):+.3f}, E2E {lift(a):+.3f},"
+            f"\n    PivotRL {lift(b):+.3f}). Read the P(rescue) column as RETENTION, not new"
+            f"\n    learning -- to demonstrate real learning, use a rawer base model or a"
+            f"\n    harder pivot. The compute/OOD story below still holds."
+        )
+    else:
+        learning_note = (
+            f"\n  * LEARNING (vs base pi_0): the untrained base scores only"
+            f"\n    P(rescue)={base_conf:.3f}; post-training genuinely teaches the pivot"
+            f"\n    (SFT {lift(s):+.3f}, E2E {lift(a):+.3f}, PivotRL {lift(b):+.3f} over base)."
+        )
+
     print(
         "\nInterpretation:"
-        f"\n  * COMPUTE (vs E2E-GRPO): PivotRL discarded the zero-variance prep &"
+        + learning_note
+        + f"\n  * COMPUTE (vs E2E-GRPO): PivotRL discarded the zero-variance prep &"
         f"\n    plating turns (advantage == 0, pure wasted rollouts) and trained only"
         f"\n    the high-variance baking pivot -> ~{turn_speedup:.1f}x fewer online rollout-turns."
         f"\n  * OOD RETENTION (vs SFT): SFT has no KL brake and drifts furthest from"
@@ -547,8 +594,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: List[str] | None = None):
-    """Run the requested arms. Returns (sft, e2e_grpo, pivotrl) ModeResults
-    (each None if not run)."""
+    """Run the requested arms. Returns (base, sft, e2e_grpo, pivotrl)
+    ModeResults; base (untrained pi_0) is always measured, the others are None
+    if not run."""
     args = build_arg_parser().parse_args(argv)
     torch.manual_seed(args.seed)
 
@@ -557,6 +605,9 @@ def main(argv: List[str] | None = None):
 
     env = GourmetChefEnv()
     tok, ref = load_reference(args.model, device)
+
+    # Always measure the untrained base model as the control/baseline.
+    res_base = run_baseline(ref, tok, env, args, device)
 
     res_s = res_a = res_b = None
     if args.mode in ("all", "S"):
@@ -567,8 +618,8 @@ def main(argv: List[str] | None = None):
         res_b = run_mode_b(ref, tok, env, args, device)
 
     if res_s and res_a and res_b:
-        print_comparison(res_s, res_a, res_b)
-    return res_s, res_a, res_b
+        print_comparison(res_base, res_s, res_a, res_b)
+    return res_base, res_s, res_a, res_b
 
 
 if __name__ == "__main__":
