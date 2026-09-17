@@ -10,6 +10,21 @@ This repo makes that idea tangible and interactive.
 
 ---
 
+## Two experiments in this repo
+
+The demo comes in two flavors, in two folders, because there are two different lessons to learn:
+
+| Folder | Reward | What it teaches | Start here if… |
+|---|---|---|---|
+| [**`dense-reward/`**](dense-reward) | a reward at **every turn** | The *mechanism*: what a pivot is, why zero-variance turns give zero learning signal, and how training only the pivot saves compute. The pivot is handed to you. | you want the clean intuition (and the flashy interactive notebook) |
+| [**`terminal-reward/`**](terminal-reward) | **one reward, at the end** | The *hard part*: with only an end-of-episode good/bad verdict (like real code/math/search tasks), PivotRL has to **discover** which turn is the pivot — and avoid the credit-assignment trap where a turn looks important only because a *later* pivot bleeds into it. | you want the realistic picture of how PivotRL works in the wild |
+
+Everything below (the plain-English primer, the research, the findings) is written against the **dense-reward** demo — it's the gentlest on-ramp. The `terminal-reward/` folder has its own README covering the discovery mechanism and the credit-assignment trap.
+
+Shared infra (`requirements.txt`, `.gitignore`) lives at the repo root; both experiments use the same dependencies and the same `Qwen/Qwen2.5-0.5B-Instruct` model on a single T4.
+
+---
+
 ## Start here — the idea in plain English
 
 ### The problem: teaching an AI a multi-step job
@@ -100,7 +115,7 @@ Because updates are localized and **KL-regularized back to a frozen reference po
 
 ### How each idea appears in this repo
 
-| Concept | Where it lives |
+| Concept | Where it lives (in `dense-reward/`) |
 |---|---|
 | GRPO group-normalized advantage | `train_comparative_grpo.py → grpo_group_loss()` |
 | Zero-variance ⇒ zero gradient | Turns 1 & 3 in `kitchen_env.py`; visible in training logs |
@@ -108,6 +123,7 @@ Because updates are localized and **KL-regularized back to a frozen reference po
 | Functional verifier reward `1[a ∈ M(s)]` | `kitchen_env.py → get_functional_reward()` (plating turn) |
 | KL to frozen `π₀` (k3 estimator) | `train_comparative_grpo.py → k3_kl()` |
 | OOD retention measurement | `train_comparative_grpo.py → ood_drift()` |
+| **Discovering** pivots from a terminal reward | `terminal-reward/train_terminal_grpo.py → discover_pivots()` |
 
 ---
 
@@ -115,15 +131,21 @@ Because updates are localized and **KL-regularized back to a frozen reference po
 
 ```
 pivotrl_souffle/
-├── kitchen_env.py                # The 3-turn environment + functional verifier (pure Python, self-testing)
-├── train_comparative_grpo.py     # Turn-level GRPO engine; 3 arms: SFT / E2E-GRPO / PivotRL
-├── databricks_launcher.py        # Databricks notebook — headless "run it all" + JSON summary
-├── pivotrl_interactive_demo.py   # Databricks notebook — the flashy interactive walkthrough ⭐
-├── requirements.txt
-└── README.md
+├── README.md                         # you are here (written against the dense-reward demo)
+├── requirements.txt                  # shared deps
+├── dense-reward/                     # per-turn rewards — the teaching version
+│   ├── kitchen_env.py                #   3-turn env + functional verifier (pure Python, self-testing)
+│   ├── train_comparative_grpo.py     #   turn-level GRPO; arms: Base / SFT / E2E-GRPO / PivotRL
+│   ├── databricks_launcher.py        #   headless Databricks notebook + JSON summary
+│   └── pivotrl_interactive_demo.py   #   flashy interactive Databricks notebook ⭐
+└── terminal-reward/                  # reward only at the end — the realistic version
+    ├── README.md                     #   discovery mechanism + credit-assignment trap
+    ├── kitchen_env.py                #   3-turn env with terminal_reward() ONLY
+    ├── train_terminal_grpo.py        #   discover_pivots() + turn-level GRPO; same 4 arms
+    └── databricks_launcher.py        #   headless Databricks notebook + JSON summary
 ```
 
-`kitchen_env.py` and `train_comparative_grpo.py` are plain importable modules. The two `*_demo` / `*_launcher` files carry a `# Databricks notebook source` header and render as runnable Databricks notebooks.
+In each folder, `kitchen_env.py` and the `train_*` file are plain importable modules; the `*_launcher` / `*_demo` files carry a `# Databricks notebook source` header and render as runnable Databricks notebooks.
 
 ---
 
@@ -133,6 +155,7 @@ pivotrl_souffle/
 
 ```bash
 pip install -r requirements.txt
+cd dense-reward        # (or: cd terminal-reward)
 
 # 1) Verify the environment + verifier + pivot structure (no model needed):
 python kitchen_env.py
@@ -143,11 +166,11 @@ python train_comparative_grpo.py --model Qwen/Qwen2.5-0.5B-Instruct --epochs 3 -
 python train_comparative_grpo.py --model sshleifer/tiny-gpt2 --epochs 3 --device cpu
 ```
 
-Useful flags: `--group-size G` (GRPO group), `--k K` (offline dry-rollouts for filtering), `--beta` (KL coefficient), `--lr`, `--epochs`, `--mode {all,S,A,B}`, `--device {auto,cuda,mps,cpu}`.
+Useful flags (dense): `--group-size G` (GRPO group), `--k K` (offline dry-rollouts for filtering), `--beta` (KL coefficient), `--lr`, `--epochs`, `--mode {all,S,A,B}`, `--device {auto,cuda,mps,cpu}`. The **terminal-reward** experiment (`cd terminal-reward && python train_terminal_grpo.py`) swaps `--k` for `--m` (completion-rollouts per candidate during discovery) and `--pivot-tau` (min action-value variance to call a turn a pivot) — see its own [README](terminal-reward/README.md).
 
 ### Option B — Databricks (the intended stage)
 
-1. **Import the folder** into your workspace (all four files in one directory so the notebooks can `import kitchen_env`). Via CLI:
+1. **Import a folder** into your workspace — all files of *one* experiment in a single directory so the notebooks can `import kitchen_env`. (Shown for `dense-reward`; `terminal-reward` is identical with `train_terminal_grpo.py` in place of `train_comparative_grpo.py` and no interactive notebook.) Via CLI:
    ```bash
    # modules as workspace files (keep the .py extension):
    databricks workspace import <dir>/kitchen_env.py --file kitchen_env.py --format RAW --overwrite
