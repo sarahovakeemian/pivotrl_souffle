@@ -191,27 +191,60 @@ The interactive notebook drives inputs with `dbutils.widgets` (pick the Turn-2 a
 
 ## Findings
 
-Numbers below are a real run of `databricks_launcher` on `Qwen/Qwen2.5-0.5B-Instruct`, single T4, latest LTS ML runtime, `epochs=3, G=4, K=4, beta=0.02, lr=1e-5`.
+The repo has **two experiments**, so there are **two result sets**. Both are real runs on `Qwen/Qwen2.5-0.5B-Instruct`, single T4, latest LTS ML, `epochs=3, G=4, beta=0.02, lr=1e-5`. Read them together — the *difference* between them is the real lesson.
+
+### A) Dense-reward results — the pivot is *handed to you*
+
+Every turn has its own reward, so profiling is cheap (one dry rollout per candidate tells you the variance directly).
 
 ```
                           Base π₀   SFT (imitation)   E2E GRPO   PivotRL
 Turns trained on          none      all 3             all 3      baking
 Online rollout-turns      0         0                 36         12  (+12 offline)
-Wall-clock (s)            0.00      2.84              7.91       2.70
 OOD drift  KL(π_θ‖π₀)     0.000     1.100             0.546      0.213
 P(rescue) at pivot        0.253     0.926             0.898      0.911
   ↳ lift over base        --        +0.672            +0.645     +0.658
 ```
 
-**0. Baseline sanity check — the task is really being learned.** The untrained base model `π₀` scores `P(rescue) = 0.253` — essentially chance (1 of 4 candidate actions). That's the control the whole comparison needs: it proves the model did *not* already know the answer, so the jump to ~0.90 is genuine learning, not the base model's prior knowledge leaking through. (Had the base already scored ~0.9, the `P(rescue)` column would be measuring *retention*, not learning — which is exactly why you always run this baseline first.)
+- **Baseline sanity check:** the untrained base scores `P(rescue) = 0.253` — essentially chance. So the jump to ~0.90 is *genuine learning*, not prior knowledge. (Always run this control; if the base already scored ~0.9 you'd be measuring retention, not learning.)
+- **Compute:** PivotRL trained only the baking pivot → **~3× fewer online rollout-turns** than E2E (12 vs 36). The prep/plating turns have zero-variance groups → zero advantage → nothing to learn there anyway.
+- **OOD retention:** SFT drifts furthest from `π₀` (`1.100` — catastrophic forgetting). PivotRL's few KL-regularized updates drift **least** (`0.213`), even below E2E (`0.546`) — it retains ~81% of the OOD capability SFT loses.
+- **All three learn the task equally** (~+0.65 lift); PivotRL just gets there cheaper and with less forgetting.
 
-**1. Compute (vs end-to-end GRPO): ~3× fewer online rollout-turns.** PivotRL's filter discarded prep and plating — the two turns whose GRPO advantage is provably 0 — and trained only the baking pivot. End-to-end GRPO rolled out all three turns every epoch and got *identical* learning value from two of them.
+### B) Terminal-reward results — the pivot must be *discovered*
 
-**2. OOD retention (vs SFT): PivotRL drifts least.** SFT, with no KL brake, drifts furthest from the reference policy (`KL = 1.100`) — the mechanism behind catastrophic forgetting. PivotRL's few, KL-regularized, localized updates keep it closest to `π₀` (`0.213`), even edging out end-to-end GRPO (`0.546`), which takes more optimizer steps. In this run PivotRL **retained ~81% of the OOD capability SFT loses** (a projected **+8.09%** toward the paper's reported **+10.04%** ceiling).
+Only the finished soufflé is scored (good/bad). No per-turn rewards, so PivotRL has to **find** the pivot by rolling out to completion.
 
-**3. All three learn the task about equally — from a near-random start.** Every arm lifts `P(rescue)` from the base's 0.253 to ~0.90–0.93 (lift ≈ +0.65) — they all learn the rescue. The difference PivotRL makes is *how it gets there*: **without** spending gradient steps on the turns that had nothing to teach, and without drifting from `π₀`.
+```
+                            Base π₀   SFT      E2E GRPO   PivotRL (discovered)
+Turns trained on            none      all 3    all 3      baking  ← discovered
+Discovery rollouts (offline) 0        0        0          192
+Training rollout-turns      0         0        36         12
+OOD drift  KL(π_θ‖π₀)       0.000     1.100    0.546      0.213
+P(rescue) at pivot          0.253     0.926    0.898      0.911
+  ↳ lift over base          --        +0.672   +0.645     +0.658
+```
 
-> **The headline:** SFT is cheap but forgets; end-to-end RL remembers but is expensive; **PivotRL is cheap *and* remembers** — by spending compute only on the pivot.
+- **Discovery worked on the real model:** from the end-only reward, PivotRL correctly identified **baking** as the sole pivot — and avoided the *credit-assignment trap* (prep looks important on naive outcome-variance because the downstream pivot bleeds into it; the action-value signal correctly rejects it). See [`terminal-reward/`](terminal-reward) for the discovery table.
+- **It still genuinely learns:** `P(rescue)` 0.253 → **0.911**, same as the dense run.
+- **But discovery isn't free:** it cost **192 offline completion-rollouts**, versus just **12** cheap dry rollouts in the dense case.
+
+### What's the difference — and why it matters
+
+**The trained model is essentially identical in both experiments** (PivotRL lands at OOD `0.213`, `P(rescue) 0.911` either way). That's the tell: **once you know the pivot is baking, training is the same.** The two experiments differ *only* in how the pivot is obtained — and that's exactly the point.
+
+| | **Dense-reward (A)** | **Terminal-reward (B)** |
+|---|---|---|
+| Reward | every turn | only at the end |
+| How the pivot is found | handed to you (per-turn variance) | **discovered** via rollout-to-completion |
+| Cost to find it | 12 cheap dry rollouts | **192** completion-rollouts |
+| Main risk | none — it's given | the **credit-assignment trap** (mistaking an upstream turn for a pivot) |
+| What it teaches | *why* pivots matter (zero-variance = no learning) | *how* you find them when reality only scores the end |
+| Realistic? | a teaching simplification | how PivotRL actually works on code / math / search |
+
+**The honest twist the terminal run exposes:** finding pivots costs real compute (192 rollouts here). At this 3-epoch toy scale that *exceeds* the 24-turn training saving — so PivotRL's *total* is briefly larger than E2E's. Discovery is a **one-time, offline** cost, though; over a real thousands-of-steps run the per-step 3× training saving compounds and the fixed probe becomes negligible. **The compute win is a scale story — which the dense demo, where profiling is nearly free, quietly hides.**
+
+> **The headline:** SFT is cheap but forgets; end-to-end RL remembers but is expensive; **PivotRL is cheap *and* remembers** — by spending training compute only on the pivot. The dense demo shows *why that works*; the terminal demo shows *what it costs to find the pivot* when the world only grades you at the finish line.
 
 ---
 
