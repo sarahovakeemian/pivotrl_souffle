@@ -77,18 +77,26 @@ We model an agent baking a soufflé over three turns:
 | 2️⃣ **Baking** 🔥 | The top is browning too fast — rescue it! | *Mixed* outcomes (collapse / burn / perfect rise) → **high variance** → **the pivot** worth training |
 | 3️⃣ **Plating** | Add a sweet topping | *Any* sweet topping works → variance **0** → **no task-learning gradient** (wasted rollout) |
 
-Trained three ways on `Qwen/Qwen2.5-0.5B-Instruct`, on a **single NVIDIA T4**:
+A base model plus three training methods on `Qwen/Qwen2.5-0.5B-Instruct`, on a **single NVIDIA T4**. These trained-model numbers are the **same in both experiments** (dense-reward and terminal-reward) — because once you know the pivot is *baking*, training is identical:
 
 | Metric | Base π₀ (untrained) | SFT (imitation) | End-to-End GRPO | **PivotRL** |
 |---|---|---|---|---|
 | Turns trained on | none | all 3 | all 3 | **baking only** |
-| Online rollout-turns | 0 | 0 | 36 | **12** (+12 offline profiling) |
-| Wall-clock (s) | 0.00 | 2.84 | 7.91 | **2.70** |
-| OOD drift `KL(π_θ‖π₀)` ↓ | 0.000 | 1.100 | 0.546 | **0.213** |
+| Training rollout-turns | 0 | 0 | 36 | **12** (3× fewer) |
+| OOD drift `KL(π_θ‖π₀)` ↓ | 0.000 | 1.100 | 0.546 | **0.213** (least) |
 | P(rescue) at pivot ↑ | **0.253** | 0.926 | 0.898 | 0.911 |
 | ↳ lift over base | — | +0.672 | +0.645 | **+0.658** |
 
-The **untrained base model scores `P(rescue)` = 0.253** — essentially random (1-in-4 among the candidate actions), which confirms the task genuinely requires learning rather than being something Qwen already knew. All three methods then **learn the pivot about equally well** (lift ≈ +0.65 to ~0.90). The story is what happens *around* that equal learning: **PivotRL used 3× fewer online rollout-turns than end-to-end GRPO and drifted the least from the reference policy (best OOD retention).** See [Findings](#findings) for the full interpretation.
+The **untrained base scores `P(rescue)` = 0.253** — essentially random (1-in-4), confirming the task genuinely requires learning rather than being something Qwen already knew. All three methods then **learn the pivot about equally** (lift ≈ +0.65 to ~0.90). The story is what happens *around* that equal learning: **PivotRL used 3× fewer training rollout-turns than end-to-end GRPO and drifted the least from the reference (best OOD retention).**
+
+**The one thing that differs between the two experiments is how PivotRL *finds* the pivot — and what that costs:**
+
+| Experiment | How the pivot is found | Offline cost to find it |
+|---|---|---|
+| **Dense-reward** (per-turn rewards) | handed to you — variance is visible at each turn | **12** cheap dry rollouts |
+| **Terminal-reward** (reward only at the end) | **discovered** by rolling out to completion | **192** completion-rollouts |
+
+That gap — 12 vs 192 — is the real lesson: when the world only grades you at the finish line, *finding* the pivot gets expensive (and risks the credit-assignment trap). See [Findings](#findings) for both result sets and the full contrast.
 
 ---
 
