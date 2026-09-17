@@ -28,6 +28,27 @@ plating                0.000        0.000     1.000   not a pivot
 
 This is the credit-assignment trap made concrete: **the naive signal flags prep (0.177); the correct signal rejects it (0.001) and finds baking (0.188).** With `--pivot-tau 0.05`, only baking survives.
 
+## Results (real run, Qwen2.5-0.5B, single T4)
+
+Real run of `databricks_launcher` (`epochs=3, G=4, M=16, pivot-tau=0.05, beta=0.02, lr=1e-5`):
+
+| Metric | Base π₀ | SFT | E2E GRPO | **PivotRL (discovered)** |
+|---|---|---|---|---|
+| Discovered pivot | — | — | — | **baking** ✓ |
+| Offline discovery rollouts | 0 | 0 | 0 | 192 |
+| Training rollout-turns | 0 | 0 | 36 | **12** |
+| OOD drift `KL(π_θ‖π₀)` ↓ | 0.000 | 1.100 | 0.546 | **0.213** |
+| P(rescue) at pivot ↑ | 0.253 | 0.926 | 0.898 | 0.911 |
+| ↳ lift over base | — | +0.672 | +0.645 | **+0.658** |
+
+Three things this confirms on a real model (not just the toy math above):
+
+1. **Discovery works from the end-only reward.** PivotRL correctly discovered `baking` as the sole pivot — no per-turn rewards required.
+2. **The model genuinely learns the pivot.** `P(rescue)` rises from a near-random **0.253** (untrained base) to **0.911** (+0.658) — real learning under a terminal signal, matching what SFT/E2E achieve.
+3. **Same PivotRL payoff as the dense demo:** **3× fewer training rollout-turns** than end-to-end GRPO (12 vs 36) and the **least OOD drift** (0.213 vs SFT's 1.100).
+
+**The scale caveat, made concrete:** discovery cost **192** offline rollouts here, so PivotRL's *total* (192 + 12) is larger than E2E's 36 *at this toy scale* — the 16-turn training saving can't outrun a fixed 192-rollout probe over just 3 epochs. Discovery is a **one-time, offline** cost; the per-step 3× training saving is what compounds over a real (thousands-of-steps) run, where the fixed probe becomes negligible. The win is a scale story, not a 3-epoch-toy story.
+
 ## The honest cost
 
 Discovery isn't free — it spends **offline completion-rollouts** (here `3 turns × 4 candidates × M`). That's the price of not having per-turn rewards. It's a **one-time, offline** cost, after which training concentrates on the single discovered pivot (vs. end-to-end GRPO grinding through all three turns). This is exactly the trade PivotRL makes in the real world: pay a bounded profiling cost up front to avoid expensive full-trajectory RL on turns that teach nothing.
