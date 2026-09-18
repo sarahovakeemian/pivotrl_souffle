@@ -12,16 +12,19 @@ This repo makes that idea tangible and interactive.
 
 ## Two experiments in this repo
 
-The demo comes in two flavors, in two folders, because there are two different lessons to learn:
+The demo comes in three flavors, in three folders, because there are three different lessons to learn:
 
 | Folder | Reward | What it teaches | Start here if… |
 |---|---|---|---|
-| [**`dense-reward/`**](dense-reward) | a reward at **every turn** | The *mechanism*: what a pivot is, why zero-variance turns give zero learning signal, and how training only the pivot saves compute. The pivot is handed to you. | you want the clean intuition (and the flashy interactive notebook) |
-| [**`terminal-reward/`**](terminal-reward) | **one reward, at the end** | The *hard part*: with only an end-of-episode good/bad verdict (like real code/math/search tasks), PivotRL has to **discover** which turn is the pivot — and avoid the credit-assignment trap where a turn looks important only because a *later* pivot bleeds into it. | you want the realistic picture of how PivotRL works in the wild |
+| [**`dense-reward/`**](dense-reward) | a reward at **every turn** (keyword rule) | The *mechanism*: what a pivot is, why zero-variance turns give zero learning signal, how training only the pivot saves compute. The pivot is handed to you. | you want the clean intuition (and the flashy interactive notebook) |
+| [**`dense-reward-simulator/`**](dense-reward-simulator) | a reward at **every turn** (from a **simulator**) | The *faithful reward*: the per-turn signal comes from a real functional verifier — an executable soufflé simulator that **simulates the action and compares its outcome to the SFT expert action** — instead of a hand-written keyword oracle. Shows functional-vs-exact equivalence and judges novel actions by effect. | you want to see how PivotRL's reward is *actually* produced |
+| [**`terminal-reward/`**](terminal-reward) | **one reward, at the end** | The *hard part*: with only an end-of-episode verdict, PivotRL has to **discover** which turn is the pivot — and avoid the credit-assignment trap where a turn looks important only because a *later* pivot bleeds into it. **(Note: this is our extension; the paper itself uses per-turn functional verifiers — see below.)** | you want the "what if there were no per-turn signal?" exploration |
 
-Everything below (the plain-English primer, the research, the findings) is written against the **dense-reward** demo — it's the gentlest on-ramp. The `terminal-reward/` folder has its own README covering the discovery mechanism and the credit-assignment trap.
+**Which is closest to the real PivotRL paper?** `dense-reward-simulator/` — the paper's reward *is* a per-turn functional verifier `r_func(s,a)=1[a ∈ M(s)]` that checks functional equivalence to the SFT expert action (e.g. NeMo/Gym's tool-call argument comparison). `dense-reward/` is the same shape with a keyword stand-in; `terminal-reward/` explores the *harder* setting the paper deliberately avoids.
 
-Shared infra (`requirements.txt`, `.gitignore`) lives at the repo root; both experiments use the same dependencies and the same `Qwen/Qwen2.5-0.5B-Instruct` model on a single T4.
+Everything below (the plain-English primer, the research, the findings) is written against the **dense-reward** demo — it's the gentlest on-ramp. Each other folder has its own README.
+
+Shared infra (`requirements.txt`, `.gitignore`) lives at the repo root; all three experiments use the same dependencies and the same `Qwen/Qwen2.5-0.5B-Instruct` model on a single T4.
 
 ---
 
@@ -141,12 +144,17 @@ Because updates are localized and **KL-regularized back to a frozen reference po
 pivotrl_souffle/
 ├── README.md                         # you are here (written against the dense-reward demo)
 ├── requirements.txt                  # shared deps
-├── dense-reward/                     # per-turn rewards — the teaching version
-│   ├── kitchen_env.py                #   3-turn env + functional verifier (pure Python, self-testing)
+├── dense-reward/                     # per-turn rewards (keyword rule) — the teaching version
+│   ├── kitchen_env.py                #   3-turn env + keyword functional verifier (pure Python, self-testing)
 │   ├── train_comparative_grpo.py     #   turn-level GRPO; arms: Base / SFT / E2E-GRPO / PivotRL
 │   ├── databricks_launcher.py        #   headless Databricks notebook + JSON summary
 │   └── pivotrl_interactive_demo.py   #   flashy interactive Databricks notebook ⭐
-└── terminal-reward/                  # reward only at the end — the realistic version
+├── dense-reward-simulator/           # per-turn rewards from a SIMULATOR — the faithful reward
+│   ├── souffle_simulator.py          #   executable soufflé verifier (state, dynamics, simulate-and-compare)
+│   ├── kitchen_env.py                #   same interface as dense-reward, reward -> simulator
+│   ├── train_comparative_grpo.py     #   (unchanged copy) same 4 arms
+│   └── databricks_launcher.py        #   headless Databricks notebook
+└── terminal-reward/                  # reward only at the end — our "no per-turn signal" extension
     ├── README.md                     #   discovery mechanism + credit-assignment trap
     ├── kitchen_env.py                #   3-turn env with terminal_reward() ONLY
     ├── train_terminal_grpo.py        #   discover_pivots() + turn-level GRPO; same 4 arms
