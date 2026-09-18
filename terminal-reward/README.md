@@ -1,12 +1,14 @@
-# 🍽️ Terminal-Reward PivotRL — *discovering* the pivot
+# 🍽️ Terminal-Reward PivotRL — *discovering* the pivot (an extension)
 
-This is the **realistic** variant of the soufflé demo. See [`../dense-reward/`](../dense-reward) for the simpler teaching version.
+> **⚠️ This is NOT how the PivotRL paper works — it's our extension.** After verifying the paper (arXiv:2603.21383), the actual method uses a **per-turn functional verifier** `r_func(s,a)=1[a ∈ M(s)]` that checks functional equivalence to the SFT expert action (e.g. NeMo/Gym's tool-call *argument comparison*). It deliberately **avoids** end-only rewards — that's part of its "low compute" claim. The faithful demo of the paper is [`../dense-reward-simulator/`](../dense-reward-simulator) (per-turn simulate-and-compare), with [`../dense-reward/`](../dense-reward) as the keyword-stand-in teaching version.
+>
+> This folder explores the **harder setting the paper sidesteps**: *what if you had no per-turn signal at all — only a reward at the very end?* It's a genuine RL problem (the credit-assignment trap is real), and a useful contrast, but treat it as a "what if," not as PivotRL's mechanism.
 
 ## What's different
 
-In the dense-reward demo, every turn hands out its own reward, so the pivot (the high-variance turn) is trivially visible — we basically *tell* the algorithm where to train. Real agentic tasks don't work that way. In code generation, math, or web search, you get **one reward, at the very end** — did the whole thing ultimately succeed? — and nothing in between. That's a **terminal reward**, and it forces the hard question PivotRL actually has to answer:
+In the dense-reward demos, every turn has its own reward, so the pivot (the high-variance turn) is directly visible. Here we remove that: you get **one reward, at the very end** — did the whole thing ultimately succeed? — and nothing in between. That's a **terminal reward** (the shape of a raw SWE-bench/QA outcome *before* you build a per-turn verifier), and it forces the question:
 
-> With only an end-of-episode good/bad verdict, **how do you figure out which turn was the pivot?**
+> With only an end-of-episode good/bad verdict, **how would you figure out which turn was the pivot?**
 
 ## How it discovers the pivot
 
@@ -77,4 +79,4 @@ On Databricks: import this folder and run `databricks_launcher` on a single-node
 
 ## Caveat
 
-Same pedagogical caveats as the dense demo (tiny model, fixed candidate action pools, illustrative OOD projection). The terminal variant is *more* faithful — it makes discovery necessary and shows the credit-assignment trap — but it still assumes a working verifier (`terminal_reward`). In genuinely open-ended domains, that verifier is the hard part; PivotRL makes training cheaper *given* one, it doesn't remove the need for it.
+Same pedagogical caveats as the dense demos (tiny model, fixed candidate action pools, illustrative OOD projection). And the big one, restated: **this terminal setup is our extension, not the paper's method** — PivotRL uses per-turn functional verifiers ([`../dense-reward-simulator/`](../dense-reward-simulator)) and avoids end-only rewards. What this folder teaches is *why* per-turn verification is worth having: without it you're forced into expensive rollout-to-completion discovery and the credit-assignment trap. Either way you still need a working verifier somewhere — in open-ended domains that verifier is the hard part, and PivotRL makes training cheaper *given* one, it doesn't remove the need for it.
