@@ -53,6 +53,22 @@ dense-reward-simulator/
 └── databricks_launcher.py     # Databricks notebook runner
 ```
 
+## Results (real run, Qwen2.5-0.5B, single T4)
+
+Real run of `databricks_launcher` (`epochs=3, G=4, K=4, beta=0.02, lr=1e-5`), reward from the simulator:
+
+| Metric | Base π₀ | SFT | E2E GRPO | **PivotRL** |
+|---|---|---|---|---|
+| Turns trained on | none | all 3 | all 3 | **baking only** |
+| Online rollout-turns | 0 | 0 | 36 | **12** (+12 offline) |
+| OOD drift `KL(π_θ‖π₀)` ↓ | 0.000 | 1.116 | 0.415 | **0.231** |
+| P(rescue) at pivot ↑ | 0.619 | 0.944 | 0.862 | 0.856 |
+| ↳ lift over base | — | +0.325 | +0.243 | **+0.236** |
+
+Same PivotRL story as the keyword demo — **3× fewer rollout-turns** than E2E, **least OOD drift** (0.231 vs SFT's 1.116, ~79% of SFT's lost OOD retained) — but now the reward came from *simulate-and-compare*, not a hand table.
+
+**One honest wrinkle the simulator surfaces:** the base model scores `P(rescue) = 0.619`, well above the `3/7 ≈ 0.43` you'd get from chance (the bake pool has 3 good actions of 7). That means Qwen's instruct prior *already leans toward* the sensible rescues (they're plausibly-worded cooking advice). There's still real learning headroom — every method lifts it to ~0.86–0.94 — but the lift is smaller than the keyword demo's 0.25→0.91, precisely because the richer, natural action set is one the base model already has opinions about. (A rawer base model, or more adversarial distractors, would widen the gap — a good knob if you want the learning to look more dramatic.)
+
 ## Run
 
 ```bash
